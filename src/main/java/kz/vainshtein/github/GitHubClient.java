@@ -197,7 +197,7 @@ public class GitHubClient implements GitHubOperations {
 	@Override
 	public void addPullRequestReview(String owner, String repository, long pullRequestNumber, String body) {
 		JsonNode requestBody = objectMapper.createObjectNode()
-				.put("body", body)
+				.put("body", "%s\n%s".formatted(ORCHESTRATOR_COMMENT_MARKER, body))
 				.put("event", "COMMENT");
 		send(jsonRequest(
 				URI.create("%s/repos/%s/%s/pulls/%d/reviews".formatted(apiBaseUrl, url(owner), url(repository), pullRequestNumber)),
@@ -286,7 +286,7 @@ public class GitHubClient implements GitHubOperations {
 		forEachPage(uri, review -> {
 			String state = review.path("state").asString("");
 			String body = review.path("body").asString("");
-			if (!body.isBlank() && !"APPROVED".equalsIgnoreCase(state)) {
+			if (!body.isBlank() && !body.contains(ORCHESTRATOR_COMMENT_MARKER) && !"APPROVED".equalsIgnoreCase(state)) {
 				feedback.add(new PullRequestFeedback(
 						"review:%s:%s".formatted(review.path("id").asString(), review.path("submitted_at").asString()),
 						"Review %s from %s: %s".formatted(

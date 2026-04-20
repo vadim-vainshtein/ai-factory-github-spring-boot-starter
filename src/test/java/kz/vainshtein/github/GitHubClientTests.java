@@ -15,8 +15,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
@@ -76,9 +82,10 @@ class GitHubClientTests {
 		HttpResponse<String> issueCommentsPage2 = response("[%s]".formatted(issueCommentJson(101, "needs a README")));
 		HttpResponse<String> reviewCommentsPage1 = response(commentsJson(201, 100, GitHubClient.ORCHESTRATOR_COMMENT_MARKER + "\ngenerated reply"));
 		HttpResponse<String> reviewCommentsPage2 = response("[%s]".formatted(reviewCommentJson(301, "src/Main.java", "fix the null case")));
-		HttpResponse<String> reviewsPage1 = response("[%s,%s]".formatted(
+		HttpResponse<String> reviewsPage1 = response("[%s,%s,%s]".formatted(
 				reviewJson(401, "APPROVED", "looks good"),
-				reviewJson(402, "CHANGES_REQUESTED", "add tests")));
+				reviewJson(402, "COMMENTED", GitHubClient.ORCHESTRATOR_COMMENT_MARKER + "\ngenerated review"),
+				reviewJson(403, "CHANGES_REQUESTED", "add tests")));
 		when(httpClient.send(any(HttpRequest.class), ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
 				.thenReturn(issueCommentsPage1)
 				.thenReturn(issueCommentsPage2)
@@ -99,7 +106,7 @@ class GitHubClientTests {
 				.containsExactly(
 						"issue-comment:101:2026-04-20T00:00:00Z",
 						"review-comment:301:2026-04-20T00:00:00Z",
-						"review:402:2026-04-20T00:00:00Z");
+						"review:403:2026-04-20T00:00:00Z");
 		assertThat(feedback.get(1).replyToCommentId()).isEqualTo(301L);
 
 		ArgumentCaptor<HttpRequest> requests = ArgumentCaptor.forClass(HttpRequest.class);
@@ -113,6 +120,24 @@ class GitHubClientTests {
 						"https://api.github.test/repos/owner/repo/pulls/42/comments?per_page=100&page=1",
 						"https://api.github.test/repos/owner/repo/pulls/42/comments?per_page=100&page=2",
 						"https://api.github.test/repos/owner/repo/pulls/42/reviews?per_page=100&page=1");
+	}
+
+	@Test
+	void addPullRequestReviewMarksGeneratedReview() throws Exception {
+		HttpResponse<String> response = response("{}");
+		when(httpClient.send(any(HttpRequest.class), ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+				.thenReturn(response);
+
+		service().addPullRequestReview("owner", "repo", 42, "review body");
+
+		ArgumentCaptor<HttpRequest> request = ArgumentCaptor.forClass(HttpRequest.class);
+		verify(httpClient).send(request.capture(), ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
+		assertThat(request.getValue().uri().toString())
+				.isEqualTo("https://api.github.test/repos/owner/repo/pulls/42/reviews");
+		assertThat(requestBody(request.getValue()))
+				.contains(GitHubClient.ORCHESTRATOR_COMMENT_MARKER)
+				.contains("review body")
+				.contains("\"event\":\"COMMENT\"");
 	}
 
 	private GitHubClient service() {
@@ -146,6 +171,38 @@ class GitHubClientTests {
 		when(response.statusCode()).thenReturn(200);
 		when(response.body()).thenReturn(body);
 		return response;
+	}
+
+	private String requestBody(HttpRequest request) throws InterruptedException {
+		StringBuilder body = new StringBuilder();
+		CountDownLatch completed = new CountDownLatch(1);
+		AtomicReference<Throwable> error = new AtomicReference<>();
+		request.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<ByteBuffer>() {
+
+			@Override
+			public void onSubscribe(Flow.Subscription subscription) {
+				subscription.request(Long.MAX_VALUE);
+			}
+
+			@Override
+			public void onNext(ByteBuffer item) {
+				body.append(StandardCharsets.UTF_8.decode(item));
+			}
+
+			@Override
+			public void onError(Throwable throwable) {
+				error.set(throwable);
+				completed.countDown();
+			}
+
+			@Override
+			public void onComplete() {
+				completed.countDown();
+			}
+		});
+		assertThat(completed.await(1, TimeUnit.SECONDS)).isTrue();
+		assertThat(error.get()).isNull();
+		return body.toString();
 	}
 
 	private String commentsJson(long firstId, long count, String body) {
