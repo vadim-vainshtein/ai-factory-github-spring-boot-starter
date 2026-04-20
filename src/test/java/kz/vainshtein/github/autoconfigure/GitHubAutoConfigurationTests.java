@@ -62,4 +62,16 @@ class GitHubAutoConfigurationTests {
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("request timeout");
 	}
+
+	@Test
+	void reportsInvalidApiBaseUrlBindingFailure() {
+		contextRunner
+				.withPropertyValues("ai-factory.github.api-base-url=/relative")
+				.run(context -> {
+					assertThat(context).hasFailed();
+					assertThat(context.getStartupFailure())
+							.hasRootCauseInstanceOf(IllegalArgumentException.class)
+							.hasRootCauseMessage("GitHub API base URL must be absolute");
+				});
+	}
 }
