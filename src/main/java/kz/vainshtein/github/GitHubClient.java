@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class GitHubClient implements GitHubOperations {
@@ -51,7 +52,7 @@ public class GitHubClient implements GitHubOperations {
 					url(owner),
 					url(repository),
 					page);
-			JsonNode issues = send(HttpRequest.newBuilder(URI.create(uri)).GET());
+			JsonNode issues = get(uri);
 			int count = 0;
 			for (JsonNode issueNode : issues) {
 				count++;
@@ -94,20 +95,19 @@ public class GitHubClient implements GitHubOperations {
 				requestBody));
 		return new GitHubPullRequest(
 				response.path("number").asLong(),
-				response.path("title").asText(),
+				response.path("title").asString(),
 				branch,
-				response.path("html_url").asText());
+				response.path("html_url").asString());
 	}
 
 	@Override
 	public GitHubPullRequestStatus pullRequestStatus(String owner, String repository, long pullRequestNumber) {
-		JsonNode response = send(HttpRequest.newBuilder(URI.create(
-				"%s/repos/%s/%s/pulls/%d".formatted(apiBaseUrl, url(owner), url(repository), pullRequestNumber))).GET());
+		JsonNode response = get("%s/repos/%s/%s/pulls/%d".formatted(apiBaseUrl, url(owner), url(repository), pullRequestNumber));
 		return new GitHubPullRequestStatus(
 				response.path("number").asLong(),
-				response.path("state").asText(),
+				response.path("state").asString(),
 				response.path("merged").asBoolean(false),
-				response.path("html_url").asText());
+				response.path("html_url").asString());
 	}
 
 	@Override
@@ -119,15 +119,15 @@ public class GitHubClient implements GitHubOperations {
 					url(owner),
 					url(repository),
 					page);
-			JsonNode response = send(HttpRequest.newBuilder(URI.create(uri)).GET());
+			JsonNode response = get(uri);
 			int count = 0;
 			for (JsonNode pullRequest : response) {
 				count++;
 				pullRequests.add(new GitHubPullRequest(
 						pullRequest.path("number").asLong(),
-						pullRequest.path("title").asText(),
-						pullRequest.path("head").path("ref").asText(""),
-						pullRequest.path("html_url").asText()));
+						pullRequest.path("title").asString(),
+						pullRequest.path("head").path("ref").asString(""),
+						pullRequest.path("html_url").asString()));
 			}
 			if (count < 100) {
 				return pullRequests;
@@ -137,16 +137,15 @@ public class GitHubClient implements GitHubOperations {
 
 	@Override
 	public PullRequestReviewTarget pullRequestReviewTarget(String owner, String repository, long pullRequestNumber) {
-		JsonNode response = send(HttpRequest.newBuilder(URI.create(
-				"%s/repos/%s/%s/pulls/%d".formatted(apiBaseUrl, url(owner), url(repository), pullRequestNumber))).GET());
+		JsonNode response = get("%s/repos/%s/%s/pulls/%d".formatted(apiBaseUrl, url(owner), url(repository), pullRequestNumber));
 		return new PullRequestReviewTarget(
 				response.path("number").asLong(),
-				response.path("title").asText(),
-				response.path("state").asText(),
-				response.path("head").path("sha").asText(""),
-				response.path("base").path("ref").asText(""),
-				response.path("head").path("ref").asText(""),
-				response.path("html_url").asText());
+				response.path("title").asString(),
+				response.path("state").asString(),
+				response.path("head").path("sha").asString(""),
+				response.path("base").path("ref").asString(""),
+				response.path("head").path("ref").asString(""),
+				response.path("html_url").asString());
 	}
 
 	@Override
@@ -159,17 +158,17 @@ public class GitHubClient implements GitHubOperations {
 					url(repository),
 					pullRequestNumber,
 					page);
-			JsonNode response = send(HttpRequest.newBuilder(URI.create(uri)).GET());
+			JsonNode response = get(uri);
 			int count = 0;
 			for (JsonNode file : response) {
 				count++;
 				files.add(new PullRequestFile(
-						file.path("filename").asText(),
-						file.path("status").asText(),
+						file.path("filename").asString(),
+						file.path("status").asString(),
 						file.path("additions").asInt(),
 						file.path("deletions").asInt(),
 						file.path("changes").asInt(),
-						file.path("patch").asText("")));
+						file.path("patch").asString("")));
 			}
 			if (count < 100) {
 				return files;
@@ -233,16 +232,16 @@ public class GitHubClient implements GitHubOperations {
 	private GitHubIssue issue(JsonNode issue) {
 		return new GitHubIssue(
 				issue.path("number").asLong(),
-				issue.path("title").asText(),
-				issue.path("body").asText(""),
-				issue.path("html_url").asText(),
+				issue.path("title").asString(),
+				issue.path("body").asString(""),
+				issue.path("html_url").asString(),
 				labels(issue));
 	}
 
 	private Set<String> labels(JsonNode issue) {
 		List<String> labels = new ArrayList<>();
 		for (JsonNode label : issue.path("labels")) {
-			String name = label.path("name").asText("");
+			String name = label.path("name").asString("");
 			if (!name.isBlank()) {
 				labels.add(name);
 			}
@@ -251,52 +250,52 @@ public class GitHubClient implements GitHubOperations {
 	}
 
 	private void addIssueComments(String owner, String repository, long pullRequestNumber, List<PullRequestFeedback> feedback) {
-		String uri = "%s/repos/%s/%s/issues/%d/comments?per_page=100".formatted(
+		String uri = "%s/repos/%s/%s/issues/%d/comments?per_page=100&page=%%d".formatted(
 				apiBaseUrl, url(owner), url(repository), pullRequestNumber);
-		for (JsonNode comment : send(HttpRequest.newBuilder(URI.create(uri)).GET())) {
-			String body = comment.path("body").asText("");
+		forEachPage(uri, comment -> {
+			String body = comment.path("body").asString("");
 			if (!body.isBlank() && !body.contains(ORCHESTRATOR_COMMENT_MARKER)) {
 				feedback.add(new PullRequestFeedback(
-						"issue-comment:%s:%s".formatted(comment.path("id").asText(), comment.path("updated_at").asText()),
-						"Pull request comment from %s: %s".formatted(comment.path("user").path("login").asText("unknown"), body),
+						"issue-comment:%s:%s".formatted(comment.path("id").asString(), comment.path("updated_at").asString()),
+						"Pull request comment from %s: %s".formatted(comment.path("user").path("login").asString("unknown"), body),
 						null));
 			}
-		}
+		});
 	}
 
 	private void addReviewComments(String owner, String repository, long pullRequestNumber, List<PullRequestFeedback> feedback) {
-		String uri = "%s/repos/%s/%s/pulls/%d/comments?per_page=100".formatted(
+		String uri = "%s/repos/%s/%s/pulls/%d/comments?per_page=100&page=%%d".formatted(
 				apiBaseUrl, url(owner), url(repository), pullRequestNumber);
-		for (JsonNode comment : send(HttpRequest.newBuilder(URI.create(uri)).GET())) {
-			String body = comment.path("body").asText("");
-			if (!body.isBlank()) {
+		forEachPage(uri, comment -> {
+			String body = comment.path("body").asString("");
+			if (!body.isBlank() && !body.contains(ORCHESTRATOR_COMMENT_MARKER)) {
 				feedback.add(new PullRequestFeedback(
-						"review-comment:%s:%s".formatted(comment.path("id").asText(), comment.path("updated_at").asText()),
+						"review-comment:%s:%s".formatted(comment.path("id").asString(), comment.path("updated_at").asString()),
 						"Review comment on %s from %s: %s".formatted(
-								comment.path("path").asText("unknown file"),
-								comment.path("user").path("login").asText("unknown"),
+								comment.path("path").asString("unknown file"),
+								comment.path("user").path("login").asString("unknown"),
 								body),
 						comment.path("id").asLong()));
 			}
-		}
+		});
 	}
 
 	private void addReviews(String owner, String repository, long pullRequestNumber, List<PullRequestFeedback> feedback) {
-		String uri = "%s/repos/%s/%s/pulls/%d/reviews?per_page=100".formatted(
+		String uri = "%s/repos/%s/%s/pulls/%d/reviews?per_page=100&page=%%d".formatted(
 				apiBaseUrl, url(owner), url(repository), pullRequestNumber);
-		for (JsonNode review : send(HttpRequest.newBuilder(URI.create(uri)).GET())) {
-			String state = review.path("state").asText("");
-			String body = review.path("body").asText("");
+		forEachPage(uri, review -> {
+			String state = review.path("state").asString("");
+			String body = review.path("body").asString("");
 			if (!body.isBlank() && !"APPROVED".equalsIgnoreCase(state)) {
 				feedback.add(new PullRequestFeedback(
-						"review:%s:%s".formatted(review.path("id").asText(), review.path("submitted_at").asText()),
+						"review:%s:%s".formatted(review.path("id").asString(), review.path("submitted_at").asString()),
 						"Review %s from %s: %s".formatted(
 								state,
-								review.path("user").path("login").asText("unknown"),
+								review.path("user").path("login").asString("unknown"),
 								body),
 						null));
 			}
-		}
+		});
 	}
 
 	private String pullRequestBody(long issueNumber, String body) {
@@ -320,14 +319,32 @@ public class GitHubClient implements GitHubOperations {
 		return builder;
 	}
 
+	private JsonNode get(String uri) {
+		return send(HttpRequest.newBuilder(URI.create(uri)).GET());
+	}
+
 	private HttpRequest.Builder jsonRequest(URI uri, String method, JsonNode body) {
 		return HttpRequest.newBuilder(uri)
 				.header("Content-Type", "application/json")
 				.method(method, HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
 	}
 
+	private void forEachPage(String uriTemplate, Consumer<JsonNode> consumer) {
+		for (int page = 1; ; page++) {
+			JsonNode response = get(uriTemplate.formatted(page));
+			int count = 0;
+			for (JsonNode item : response) {
+				count++;
+				consumer.accept(item);
+			}
+			if (count < 100) {
+				return;
+			}
+		}
+	}
+
 	private JsonNode send(HttpRequest.Builder requestBuilder) {
-		HttpRequest request = authenticated(requestBuilder).build();
+		HttpRequest request = authenticated(requestBuilder.timeout(properties.requestTimeout())).build();
 		try {
 			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 			if (response.statusCode() < 200 || response.statusCode() > 299) {
